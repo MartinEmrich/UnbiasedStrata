@@ -17,11 +17,40 @@ For the three tested models (`n_kv = 2`, `head_dim = 256`, 11 attention layers f
 the engine prints its row size at load:
 
 ```
-strata-poly: q8_0 KV cache: 544 bytes a row
+strata-poly: q8_0 KV cache: 544 bytes a K row, 544 a V row
 ```
 
 544 = 512 codes + 2 blocks × 2 scales, a head, K and V. `--kv q8_0` needs `n_kv * head_dim` to be a multiple
 of 32; the models here are. A grammar that is not gets a clear error rather than a wrong answer.
+
+## Mixing the two: `--kv k16v8`
+
+K and V are stored one at a time, and `--kv k16v8` uses both formats: the **keys stay fp16** and only the
+**values become Q8_0**. The attention scores are therefore the same numbers `--kv fp16` computes, and only the
+weighted sum of the values carries quantization error - the half of the cache whose error is averaged by the
+attention weights rather than fed through the softmax.
+
+For the same models (512 values a row), what a token costs an attention layer:
+
+| `--kv` | a K row | a V row | a token, 11 layers | 131072 tokens |
+|---|---|---|---|---|
+| `fp16` | 1024 | 1024 | 22,528 B | 2.95 GB |
+| `k16v8` | 1024 | 544 | 17,248 B | 2.26 GB |
+| `q8_0` | 544 | 544 | 11,968 B | 1.57 GB |
+
+What to expect from it, against the two it sits between:
+
+- **Prompt: cheaper than `--kv q8_0`, level with `fp16`.** The batch's products take fp16 operands, so a Q8_0
+  cache's rows are dequantized into a workspace before each block is read (`kernels.cu`'s `dequant_q8_kernel`).
+  `k16v8` dequantizes only the values and reads its keys where they lie.
+- **Decode: between the two, nearer `fp16`.** The score kernel reads the fp16 keys (twice the bytes of Q8_0)
+  and the value kernel reads the Q8_0 values (half of fp16).
+- **The win is VRAM the experts can have.** As under `--kv q8_0`, what the cache gives back goes to the expert
+  cache; that, and not the attention kernels, is where the tokens per second move.
+
+The load line says which pair is in use (`k16v8`, `q8_0`, `fp16`), and `poly_kv_q8_test` covers the mixed read:
+`attend()` with fp16 keys and Q8_0 values against the same attention over the dequantized values as an fp16
+cache, and `attend_batch()` the same way with the values' workspace half.
 
 All three models loaded and answered with `--kv q8_0` at the full 131072-token context, and with a picture
 through the vision encoder (`strata-vision`), each replying `KV OK` to the fixed prompt.
@@ -117,7 +146,7 @@ The three run configs (`strata-tiel.json`, `strata-ornith.json` and `strata-occa
 - `glm5next` / GLM 5.3 Flash (`dsa_attend`): its attention is not the one this cache quantizes, so `--kv q8_0`
   is not offered for it.
 - **Gemma 4 is out of v1.** `--kv q8_0` with a `gemma4` file is rejected cleanly at load
-  (`--kv q8_0 is only supported for qwen35moe models in v1; this is a 'gemma4' model`), not run.
+  (`--kv q8_0 (and --kv k16v8) are only supported for qwen35moe models in v1; this is a 'gemma4' model`), not run.
 - ROCm/HIP: the same kernels, measured below on an AMD card (it was rejected on HIP until that was done).
 - The default path stays byte-identical to the last release.
 
@@ -132,15 +161,18 @@ Full transcript in the T8.5 report.
 
 ## Files touched
 
-- `src/poly/engine.hpp` — `KvFmt` and `Options::kv_format` (default `kFp16`).
-- `src/poly/main.cpp` — `--kv fp16|q8_0` parsing and help text.
+- `src/poly/engine.hpp` — `KvFmt` and `Options::kv_format_k` / `kv_format_v` (both `kFp16` by default; one
+  format a cache half, which is what lets `--kv k16v8` mix them).
+- `src/poly/main.cpp` — `--kv fp16|q8_0|k16v8` parsing and help text.
 - `src/poly/engine.cpp` — the `qwen35moe`-only check and the clean rejection for other architectures.
 - `src/poly/qwen35.hpp`, `src/poly/qwen35.cpp` — the Q8_0 cache pointers, allocation, save/load, the row-size
-  print, and the attention path that reads codes+scales.
+  print, and the attention path that reads codes+scales.  Each half is allocated, stored, saved and read on its
+  own; `kv_runs()` is what keeps `card_row_bytes()` and the row movers in step.
 - `src/poly/kernels.cu`, `include/strata/poly/kernels.hpp` — `store_q8` / `store_q8_at` and the Q8_0 attention
-  readers (scores and outputs).
+  readers (scores and outputs).  They took K's and V's formats independently from the start, so the mixed mode
+  needed no kernel change.
 - `src/poly/kv_q8_test.cpp` (new) — the kernel unit test: round-trip within half a block scale, byte-exact
-  layout, and the ring store.
+  layout, the ring store, and the mixed (`k16v8`) read through `attend()` and `attend_batch()`.
 - `CMakeLists.txt` — the `poly_kv_q8_test` target and its `add_test`.
 - `strata-tiel.json`, `strata-ornith.json`, `strata-occamy.json` — the three run configs now carry
   `--kv q8_0` and `--vram-reserve-mib 512`.

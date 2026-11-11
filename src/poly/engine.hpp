@@ -36,7 +36,8 @@ namespace strata::poly {
 class Shards;
 struct Likeliest;
 
-/// The attention caches' storing format: fp16 (default) or ggml Q8_0; opt-in via --kv.
+/// One attention cache's storing format: fp16 (default) or ggml Q8_0; opt-in via --kv.  K and V carry one
+/// apiece (`Options::kv_format_k` / `kv_format_v`), so a mode is a PAIR of these.
 enum class KvFmt { kFp16 = 0, kQ8_0 = 1 };
 
 struct Options {
@@ -74,7 +75,11 @@ struct Options {
     bool graphs = true;           ///< a token's fixed launches are recorded once, a CUDA graph a layer, and replayed
     bool kv_grow = true;          ///< the attention caches get VRAM as the sequence grows, where the card can map it
                                   ///< so; false: for the whole context at load, as the expert cache gets the rest
-    KvFmt kv_format = KvFmt::kFp16;   ///< the K and V caches' format; fp16 by default (byte-identical path)
+    // The K and V caches' formats, ONE A PIECE: --kv names both halves at once (`fp16`, `q8_0`) or mixes them
+    // (`k16v8`: fp16 keys, Q8_0 values).  Both fp16 is the byte-identical default; Q8_0 in either half needs a
+    // qwen35moe model (Engine::open) and a `n_kv * head_dim` that is a multiple of 32 (Qwen35).
+    KvFmt kv_format_k = KvFmt::kFp16;   ///< the key cache's format
+    KvFmt kv_format_v = KvFmt::kFp16;   ///< the value cache's format
     int window = 0;               ///< the most tokens window() takes: the known one and guesses after it; 1: none;
                                   ///< 0: 8, or 4 where every guess keeps a copy of the recurrent state
     bool draft = true;            ///< run the block that guesses ahead, when there is one and window is above 1

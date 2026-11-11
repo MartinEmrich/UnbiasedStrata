@@ -258,7 +258,7 @@ goes on from where it stopped, and an edit goes back to the nearest checkpoint.
 | `--draft-model FILE.gguf` | | a file of the same model to take that block from, when `--model` has none; setup passes the one it downloaded |
 | `--draft-vocab N` | 131072 for Qwen3.6, Ornith and Tiel Coder, all of it for the others | the block guesses among the vocabulary's first N tokens; 0 = all |
 | `--kv-whole` | on an AMD card | give the attention caches VRAM for the whole context at load, not as the conversation grows; setup writes it for an AMD card, where ROCm keeps the VRAM the expert cache gives back ([AMD_HIP.md](AMD_HIP.md#strata-poly-on-amd-beta)) |
-| `--kv fmt` | fp16 | the K and V attention caches' format: `fp16` (default, unchanged) or `q8_0` (ggml Q8_0 blocks: one fp16 scale a 32-value block of int8 codes): half the KV VRAM, the same answers on the tested models ([Q8_KV.md](Q8_KV.md)) |
+| `--kv fmt` | fp16 | the K and V attention caches' format: `fp16` (default, unchanged), `q8_0` (ggml Q8_0 blocks: one fp16 scale a 32-value block of int8 codes): half the KV VRAM, the same answers on the tested models, or `k16v8` (fp16 keys, Q8_0 values: a quarter off, the scores unchanged) ([Q8_KV.md](Q8_KV.md)) |
 | `--prompt-batch N` | 1024 | prompt tokens read at a time, 1 to 4096; about 1.4 MiB of VRAM each |
 | `--stage-mib N` | 2048 | VRAM the experts outside the cache pass through while a prompt is read |
 | `--stage-ahead N` | 1024 | from N tokens, a batch copies those experts before the layer has chosen, as does every batch of a prompt of N tokens or more that is read several at a time; 0 = never |

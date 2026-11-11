@@ -4,6 +4,7 @@ reference answer, top-20 probabilities per step.  poly-run.py <file-tag> <gguf> 
 arms: base   = --tail-skip 0 --no-draft --lookup 0 --window 1          (arm 1)
       draft  = --tail-skip 0 (draft block, lookup 3, window 8 defaults) (arm 2; top.txt must equal base's bytes)
       kvq8   = base + --kv q8_0                                          (arm 3)
+      k16v8  = base + --kv k16v8 (fp16 keys, Q8_0 values; T2 against kvq8 and base)
       pb512  = base + --prompt-batch 512                                 (3.3 last paragraph, step 0 only)
 Writes poly/<file-tag>/<arm>/<seq>.top.txt, .ids.txt, .log, command.sh."""
 import os, pathlib, subprocess, sys, time
@@ -20,6 +21,7 @@ def answer_path(p, seq, tag):
 ARMS = {'base': ['--tail-skip', '0', '--no-draft', '--lookup', '0', '--window', '1'],
         'draft': ['--tail-skip', '0'],
         'kvq8': ['--tail-skip', '0', '--no-draft', '--lookup', '0', '--window', '1', '--kv', 'q8_0'],
+        'k16v8': ['--tail-skip', '0', '--no-draft', '--lookup', '0', '--window', '1', '--kv', 'k16v8'],
         'pb512': ['--tail-skip', '0', '--no-draft', '--lookup', '0', '--window', '1', '--prompt-batch', '512']}
 OUT = ROOT / 'poly' / tag / arm; OUT.mkdir(parents=True, exist_ok=True)
 env = dict(os.environ, STRATA_FREEZE_EXPERTS='1')

@@ -189,6 +189,7 @@ Each of these changes bits or ids on purpose. A comparison holds them still, and
 | B | prompt cache | 6 checkpoints; a prompt that extends the engine's sequence resumes even at 0 (`src/poly/conversations.hpp:234`) | Which tokens share a chunk, so MMQ versus MMVQ and `attend_batch` versus `attend` (`conversations.hpp:106-127`, `main.cpp:399-414`) | One `--tokens` process per sequence, same `--prompt-batch` both arms |
 | B | expert placement | all resident on 24 GB | On a smaller card, `STRATA_FREEZE_EXPERTS=1` holds the split (`main.cpp:1094-1096`) | Set it anyway |
 | B | `--kv q8_0` | off | Lossy format | Ladder as for A |
+| B | `--kv k16v8` (fp16 keys, Q8_0 values) | off | Lossy in V only; the scores are `--kv fp16`'s | Ladder as for `q8_0`; the scores' half is T2-exact against `base` by construction, so the KL against it is V's error alone |
 
 ## 2. Upstream's parity and bench programs
 
@@ -247,7 +248,7 @@ estimates from the registered timeouts and the fixture sizes, not measurements.
 | `poly_norm_q8_test` (`src/poly/norm_q8_test.cu`) | hand, `:2099` | B norm + q8_1 fused kernel, n includes 2048 | `axpy` + `rms_norm` + `native_quantize_q8_1` | GPU | seconds | bytes equal (`:51-55`) |
 | `poly_gemm_small_test` (`src/poly/gemm_small_test.cu`) | hand, `:2105` | B router and small F32 projections in a prompt chunk | host `fma` chain | GPU | seconds | memcmp (`:41`) |
 | `poly_attend_test` (`src/poly/attend_test.cu`) | hand, `:2110` | B attention kernels, but at dim 64, 32 heads, 8 KV heads (`:23`): LFM2's shape, not Qwen3.6's | the engine's other kernels; `attend_batch` vs `attend` | GPU | seconds | <= 1e-5 and bitwise alone vs on-card (`:66-70`); batch <= 4e-3 (`:96`) |
-| `poly_kv_q8_test` (`src/poly/kv_q8_test.cpp`) | gated, `:2136-2141` | B `--kv q8_0` store | host arithmetic | GPU | seconds | round trip within half_scale + 5e-4·x + 1e-3 (`:87`); codes and scales memcmp (`:139`, `:150`); ring memcmp (`:198`, `:207`) |
+| `poly_kv_q8_test` (`src/poly/kv_q8_test.cpp`) | gated, `:2136-2141` | B `--kv q8_0` store, and the `--kv k16v8` read | host arithmetic | GPU | seconds | round trip within half_scale + 5e-4·x + 1e-3 (`:87`); codes and scales memcmp (`:139`, `:150`); ring memcmp (`:198`, `:207`); `attend()` fp16-K + Q8_0-V within 5e-3 of the same attention over the dequantized values as fp16; `attend_batch()` the same within 1e-5 (one workspace half, `kwork` null) |
 | `poly_draft_race_test` (`src/poly/draft_race_test.cpp`) | hand, `:2083-2090` | B draft block: repeated reads with the block give the same guesses | run 1 of 8 | GPU, the model file | minutes | guesses equal, probs memcmp, state equal (`:94-100`); **SKIPs (exit 3) with every expert cached (`:84-88`), so it skips on the pod** |
 | `kv_q8_parity` (`src/kernels/kv_q8_parity.cpp`) | `:1188` | A int8 KV append and gather | host reference; the FP16 path | GPU | seconds | codes and scales bitwise (`:96`); gather bitwise (`:128`); int8 vs fp16 within 0.5 + 2·127/2048 + 1e-3 steps (`:138`) |
 | `kv_stream_parity` (`src/kernels/kv_stream_parity.cpp`) | `:1194` | A KV streaming: streamed vs resident attention, int8/fp16/q4_0, ring restore | resident path | GPU | seconds | memcmp (`:190`, `:232`) |
@@ -367,7 +368,9 @@ strata-poly --model F --max-context 32768 --tail-skip 0 --no-draft --lookup 0 --
 - Arm 2, the same command without `--no-draft --lookup 0 --window 1` (defaults: draft block, lookup 3, window
   8): `top.txt` must be byte-identical to arm 1's (T0). `--follow` keeps the sequence the same, so only the
   window composition differs, which `engine.hpp:226-229` says changes nothing.
-- Arm 3, `--kv q8_0` on arm 1's flags: T2 against arm 1, T1 against llama.cpp.
+- Arm 3, `--kv q8_0` on arm 1's flags: T2 against arm 1, T1 against llama.cpp. The `k16v8` arm (`--kv k16v8`,
+  the same flags) is T2 against arm 1 and against arm 3: its scores are arm 1's, so its KL against arm 1 is the
+  value cache's error with no score error in it, and it must sit between arm 1 and arm 3 on every sequence.
 - Arm 4, UD-IQ4_XS, arms 1 and 2 again. Arm 5 (smaller cards only, not the pod): `--vram-reserve-mib` large
   enough to push a third of the experts to the CPU, `STRATA_FREEZE_EXPERTS=1`, `--tail-skip 0`: scores the
   `cpu_experts` path (section 1.3).

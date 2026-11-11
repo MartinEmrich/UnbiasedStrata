@@ -1052,8 +1052,10 @@ void usage() {
                  "                         as a CUDA graph and replayed)\n"
                  "  --kv-whole             give the attention caches VRAM for the whole context at load (default: as\n"
                  "                         the conversation grows, the expert cache having the rest until then)\n"
-                 "  --kv fmt               the K and V attention caches' format: fp16 (default, unchanged) or q8_0\n"
-                 "                         (ggml Q8_0 blocks: half the KV VRAM, slightly different answers); opt-in\n"
+                 "  --kv fmt               the K and V attention caches' format: fp16 (default, unchanged), q8_0\n"
+                 "                         (ggml Q8_0 blocks: half the KV VRAM, slightly different answers) or k16v8\n"
+                 "                         (the keys stay fp16 - the attention scores are unchanged - and only the\n"
+                 "                         values are Q8_0: a quarter off the KV VRAM); opt-in\n"
                  "  --expert-swaps N       while an answer is written, up to N experts it keeps using are on their way\n"
                  "                         into VRAM, in place of cached ones it uses less (default 64, 0 = the cache\n"
                  "                         stays as it was loaded)\n"
@@ -1149,10 +1151,11 @@ int main(int argc, char** argv) {
         else if (a == "--kv-whole") o.kv_grow = false;
         else if (a == "--kv") {
             const std::string fmt = val();
-            if (fmt == "fp16") o.kv_format = KvFmt::kFp16;
-            else if (fmt == "q8_0") o.kv_format = KvFmt::kQ8_0;
+            if (fmt == "fp16") { o.kv_format_k = o.kv_format_v = KvFmt::kFp16; }
+            else if (fmt == "q8_0") { o.kv_format_k = o.kv_format_v = KvFmt::kQ8_0; }
+            else if (fmt == "k16v8") { o.kv_format_k = KvFmt::kFp16; o.kv_format_v = KvFmt::kQ8_0; }
             else {
-                std::fprintf(stderr, "strata-poly: --kv %s: unknown format (use fp16 or q8_0)\n", fmt.c_str());
+                std::fprintf(stderr, "strata-poly: --kv %s: unknown format (use fp16, q8_0 or k16v8)\n", fmt.c_str());
                 std::exit(2);
             }
         }

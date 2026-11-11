@@ -59,7 +59,8 @@ private:
         uint16_t* keys = nullptr;   ///< max_context * n_kv * head_dim, fp16
         uint16_t* vals = nullptr;
         // q8_0 cache (opt-in): codes are n_kv*head_dim int8 a row; scales are one fp16 per 32-value block
-        // (n_kv*(head_dim/32) a row).  Used instead of keys/vals when Options::kv_format == kQ8_0.
+        // (n_kv*(head_dim/32) a row).  A half holds ONE of the two, whichever its Options::kv_format_k /
+        // kv_format_v says - the codes pointer is what the store and the read ask (k16v8: fp16 keys, q8 values).
         int8_t*   k_codes  = nullptr;
         uint16_t* k_scales = nullptr;
         int8_t*   v_codes  = nullptr;
@@ -71,6 +72,9 @@ private:
     void attn(Block& B, int64_t pos, int n);
     void attn_rows(Block& B, int n);
     void attn_store(Block& B, int64_t pos, int n);
+    /// One cache half of one block as the row movers see it: its runs in the order save_card_rows writes them
+    /// (fp16 one run a row, Q8_0 its codes and then its scales).  0 for a block holding no such half.
+    int kv_runs(const Block& B, bool key, void* ptr[2], size_t row[2]) const;
     void turn_of(int64_t row, int32_t* thw) const;
     const int32_t* turns(int64_t pos, int n, int64_t* first);
 
